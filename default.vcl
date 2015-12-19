@@ -102,6 +102,19 @@ sub vcl_recv {
     return (pass);
   }
 
+	# don't cache logged-in users or authors
+	if (req.http.Cookie ~ "wp-postpass_|wordpress_logged_in_|comment_author|PHPSESSID") {
+		return(pass);
+	}
+	# don't cache ajax requests
+	if (req.http.X-Requested-With == "XMLHttpRequest") {
+		return(pass);
+	}
+	# don't cache these special pages, e.g. urls with ?nocache or comments, login, regiser, signup, ajax, etc.
+	if (req.url ~ "nocache|wp-admin|wp-(comments-post|login|signup|activate|mail|cron)\.php|preview\=true|admin-ajax\.php|xmlrpc\.php|bb-admin|server-status|control\.php|bb-login\.php|bb-reset-password\.php|register\.php") {
+		return(pass);
+	}
+
   # Some generic URL manipulation, useful for all templates that follow
   # First remove the Google Analytics added parameters, useless for our backend
   if (req.url ~ "(\?|&)(utm_source|utm_medium|utm_campaign|utm_content|gclid|cx|ie|cof|siteurl)=") {
@@ -115,6 +128,10 @@ sub vcl_recv {
   if (req.url ~ "\#") {
     set req.url = regsub(req.url, "\#.*$", "");
   }
+
+	### looks like we might actually cache it!
+	# fix up the request
+	set req.url = regsub(req.url, "\?replytocom=.*$", "");
 
   # Strip a trailing ? if it exists
   if (req.url ~ "\?$") {
@@ -295,6 +312,12 @@ sub vcl_miss {
 sub vcl_backend_response {
   # Called after the response headers has been successfully retrieved from the backend.
 
+	# Don't store backend
+	if (bereq.url ~ "nocache|wp-admin|admin|login|wp-(comments-post|login|signup|activate|mail|cron)\.php|preview\=true|admin-ajax\.php|xmlrpc\.php|bb-admin|server-status|control\.php|bb-login\.php|bb-reset-password\.php|register\.php") {
+		set beresp.uncacheable = true;
+		return (deliver);
+	}
+
   # Pause ESI request and remove Surrogate-Control header
   if (beresp.http.Surrogate-Control ~ "ESI/1.0") {
     unset beresp.http.Surrogate-Control;
@@ -333,6 +356,14 @@ sub vcl_backend_response {
     set beresp.uncacheable = true;
     return (deliver);
   }
+
+  if (bereq.http.Cookie ~ "wp-postpass_|wordpress_logged_in_|comment_author|PHPSESSID") {
+		set beresp.http.X-Cacheable = "NO:Got Session";
+		set beresp.uncacheable = true;
+		return (deliver);
+
+	# You are respecting the Cache-Control=private header from the backend
+	}
 
   # Allow stale content, in case the backend goes down.
   # make Varnish keep all objects for 6 hours beyond their TTL
